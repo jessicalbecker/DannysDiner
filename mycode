@@ -1,0 +1,239 @@
+#  Danny's Diner
+
+---
+
+**Query #1**
+## 1. What is the total amount each customer spent at the restaurant?
+-- I joined the sales & menu tables where product ids matched. Grouping by customer id combined their purchases.
+
+    SELECT sales.customer_id AS Customer,
+    SUM(menu.price) AS Amount_Spent
+    FROM dannys_diner.sales AS sales
+    INNER JOIN dannys_diner.menu AS menu
+    ON sales.product_id = menu.product_id
+    GROUP BY Customer
+    ORDER BY Amount_Spent DESC;
+
+| customer | amount_spent |
+| -------- | ------------ |
+| A        | 76           |
+| B        | 74           |
+| C        | 36           |
+
+---
+**Query #2**
+##2. How many days has each customer visited the restaurant?
+-- I queried the sales table for the customer id and to count the distinct dates. Grouped by customer id so the distinct days visited were added together.
+
+    SELECT customer_id AS Customer,
+    COUNT(DISTINCT order_date) AS Days_Visited
+    FROM dannys_diner.sales
+    GROUP BY Customer
+    ORDER BY Days_Visited DESC;
+
+| customer | days_visited |
+| -------- | ------------ |
+| B        | 6            |
+| A        | 4            |
+| C        | 2            |
+
+---
+**Query #3**
+##3. What was the first item from the menu purchased by each customer?
+--This one was tricky, I needed to create a CTE(common table expression) which is like a temporary table I can draw info from. This CTE tells us the customer id, date, menu name, and rank of menu items by customer and by first time ordered. I can now easily pull out just the top 1 of these by customer.
+
+    WITH sales_ordered_cte AS
+    (
+       SELECT sales.customer_id, sales.order_date, menu.product_name,
+          DENSE_RANK() OVER(PARTITION BY sales.customer_id
+          ORDER BY sales.order_date) AS rank
+       FROM dannys_diner.sales
+       JOIN dannys_diner.menu
+          ON sales.product_id = menu.product_id
+    )
+    SELECT customer_id AS Customer,
+    product_name AS First_Order
+    FROM sales_ordered_cte
+    WHERE rank = 1
+    GROUP BY Customer, First_Order;
+
+| customer | first_order |
+| -------- | ----------- |
+| A        | curry       |
+| A        | sushi       |
+| B        | curry       |
+| C        | ramen       |
+
+---
+**Query #4**
+## 4. What is the most purchased item on the menu and how many times was it purchased by all customers?
+--We have counted all the sales and displayed that count & the menu item names. Then we grouped our results by the menu items, which adds our counts per item. Finally it is ordered by that count, highest at the top and limited to showing just the first result.
+
+    SELECT COUNT(sales.product_id) AS Times_Purchased,
+    menu.product_name AS Menu_Item
+    FROM dannys_diner.sales AS sales
+    INNER JOIN dannys_diner.menu AS menu
+    ON sales.product_id = menu.product_id
+    GROUP BY Menu_Item
+    ORDER BY Times_Purchased DESC LIMIT 1;
+
+| times_purchased | menu_item |
+| --------------- | --------- |
+| 8               | ramen     |
+
+---
+**Query #5**
+##5. Which item was the most popular for each customer?
+--Because the table is small we could have done this more simply but if our table was larger we can safely reproduce this code. We used a CTE to create a temporary table that houses customer,count of orders, menu items which are split by customer and ranked by how many sales. We had to make the rank show a descending order, putting the highest at the top in ranking.
+
+    WITH top_order_cte AS
+    (
+      	SELECT sales.customer_id AS Customer, COUNT(sales.product_id) AS Order_Count, menu.product_name AS Menu_Item,
+    		DENSE_RANK() OVER (PARTITION BY sales.customer_id
+                        ORDER BY COUNT(sales.product_id) DESC) AS Top_Order
+    	FROM dannys_diner.sales AS sales
+    	INNER JOIN dannys_diner.menu AS menu
+    		ON sales.product_id = menu.product_id
+    	GROUP BY Customer, Menu_Item
+      )
+      SELECT Customer, Menu_Item, Order_Count, Top_Order
+      FROM top_order_cte
+      WHERE Top_Order = 1;
+
+| customer | menu_item | order_count | top_order |
+| -------- | --------- | ----------- | --------- |
+| A        | ramen     | 3           | 1         |
+| B        | ramen     | 2           | 1         |
+| B        | curry     | 2           | 1         |
+| B        | sushi     | 2           | 1         |
+| C        | ramen     | 3           | 1         |
+
+---
+**Query #6**
+##6. Which item was purchased first by the customer after they became a member?
+--Again we needed to create a CTE to easily pull information from. We have customer id, menu item, and the order date. This time we used rank on the order dates, separated by customer and in ascending order. Then we used a right join to only pull information from the sales table if it matched on customer ids from member table(since we only wanted to know about customers who are members). We also needed menu item names and joined the menu table with sales. Then we used where to find only sale dates equal to or after the member join date. We grouped our table and ordered it by date of sale. Can you tell I originally wrote this CTE as my main query and then realized I needed to make it a CTE?
+
+    WITH member_orders_cte AS
+    (
+      	SELECT sales.customer_id AS customer,
+    		menu.product_name AS menu_item,
+    		sales.order_date AS first_order_as_member,
+    	RANK () OVER(PARTITION BY sales.customer_id
+                 ORDER BY sales.order_date) AS rank
+    	FROM dannys_diner.sales AS sales
+    	RIGHT JOIN dannys_diner.members AS members
+    		ON sales.customer_id = members.customer_id
+    	INNER JOIN dannys_diner.menu AS menu
+    		ON sales.product_id = menu.product_id
+    	WHERE sales.order_date >= members.join_date
+    	GROUP BY  menu_item, customer, first_order_as_member
+    	ORDER BY first_order_as_member
+    )
+    SELECT customer, menu_item, first_order_as_member
+    FROM member_orders_cte
+    WHERE rank = 1;
+
+| customer | menu_item | first_order_as_member    |
+| -------- | --------- | ------------------------ |
+| A        | curry     | 2021-01-07T00:00:00.000Z |
+| B        | sushi     | 2021-01-11T00:00:00.000Z |
+
+---
+**Query #7**
+##7. Which item was purchased just before the customer became a member?
+--We were able to reuse or prior code and tweak it to get our results. We changed the name of our CTE,we changed the alias of our order date, made our rank in descending, and used WHERE to find prior to becoming a member.
+
+    WITH prior_member_orders_cte AS
+    (
+      	SELECT sales.customer_id AS customer,
+    		menu.product_name AS menu_item,
+    		sales.order_date AS prior_order_as_member,
+    	RANK () OVER(PARTITION BY sales.customer_id
+                 ORDER BY sales.order_date DESC) AS rank
+    	FROM dannys_diner.sales AS sales
+    	RIGHT JOIN dannys_diner.members AS members
+    		ON sales.customer_id = members.customer_id
+    	INNER JOIN dannys_diner.menu AS menu
+    		ON sales.product_id = menu.product_id
+    	WHERE sales.order_date < members.join_date
+    	GROUP BY  menu_item, customer, prior_order_as_member
+    	ORDER BY prior_order_as_member
+    )
+    SELECT customer, menu_item, prior_order_as_member
+    FROM prior_member_orders_cte
+    WHERE rank = 1;
+
+| customer | menu_item | prior_order_as_member    |
+| -------- | --------- | ------------------------ |
+| A        | sushi     | 2021-01-01T00:00:00.000Z |
+| A        | curry     | 2021-01-01T00:00:00.000Z |
+| B        | sushi     | 2021-01-04T00:00:00.000Z |
+
+---
+**Query #8**
+##8. What is the total items and amount spent for each member before they became a member?
+--We have the customer, count of items ordered, and total of purchases where the customer id matches those with memberships and the date of sale is prior to membership. The question asks for total items not unique items, but we could add DISTINCT to our COUNT to find that information.
+
+    SELECT sales.customer_id AS customer,
+    COUNT(sales.product_id) AS total_items,
+    SUM(menu.price) AS total_spent
+    FROM dannys_diner.sales AS sales
+    RIGHT JOIN dannys_diner.members AS members
+    ON sales.customer_id = members.customer_id
+    INNER JOIN dannys_diner.menu AS menu
+    ON sales.product_id = menu.product_id
+    WHERE sales.order_date < members.join_date
+    GROUP BY  customer;
+
+| customer | total_items | total_spent |
+| -------- | ----------- | ----------- |
+| B        | 3           | 40          |
+| A        | 2           | 25          |
+
+---
+**Query #9**
+##9.  If each $1 spent equates to 10 points and sushi has a 2x points multiplier - how many points would each customer have?
+--We simply pulled the customer id and total points if product is sushi is $1*20 and every other order is $1*10, grouped by customer.
+
+    SELECT sales.customer_id AS customer,
+    SUM (CASE
+    	WHEN sales.product_id = 1 THEN menu.price * 20
+        ELSE menu.price * 10
+    END) AS points
+    FROM dannys_diner.sales AS sales
+    INNER JOIN dannys_diner.menu AS menu
+    ON sales.product_id = menu.product_id
+    GROUP BY customer
+    ORDER BY points DESC;
+
+| customer | points |
+| -------- | ------ |
+| B        | 940    |
+| A        | 860    |
+| C        | 360    |
+
+---
+**Query #10**
+##10. In the first week after a customer joins the program (including their join date) they earn 2x points on all items, not just sushi - how many points do customer A and B have at the end of January?
+--For this we used a CASE statement that said: when the order date is less than the membership join date plus 7 days or equal to the date of membership, then each menu item is 20 points per $1, otherwise only sushi (item 1) is *20 and everything else is *10. We then use RIGHT JOIN to only see customers on the membership database and INNER JOIN to see named menu items. Finally we grouped by customer.
+
+    SELECT sales.customer_id AS customer,
+    SUM (CASE
+     	WHEN sales.order_date<members.join_date+7 and sales.order_date>=members.join_date THEN menu.price * 20
+    	WHEN sales.product_id = 1 THEN menu.price * 20
+        ELSE menu.price * 10
+    END) AS points
+    FROM dannys_diner.sales AS sales
+    RIGHT JOIN dannys_diner.members AS members
+    ON sales.customer_id = members.customer_id
+    INNER JOIN dannys_diner.menu AS menu
+    ON sales.product_id = menu.product_id
+    GROUP BY customer
+    ORDER BY points DESC;
+
+| customer | points |
+| -------- | ------ |
+| A        | 1370   |
+| B        | 940    |
+
+---
